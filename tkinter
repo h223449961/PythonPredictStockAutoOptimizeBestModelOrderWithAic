@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+'''
+這個版本：
+一、先讀 yahoo finance 格式的個股 excel 資料
+二、設定此資料的時間 index 起：為此個股資料出現的最早日期
+    設定此資料的時間 index 訖：為此個股資料出現的最晚日期
+三、將個股日期、該日期對應的收盤價轉換成 panda serie
+四、這個版本可以將時間 index 用 .to_period() 轉換成按工作日：星期一至五來排，或按每天來排
+五、將 serie to data frame
+六、用 numpy .log() 加強資料的線性特徵，並差分平穩（因為這個股票序列在經濟領域中大部分都是不平穩的）
+七、在給定的範圍內用最小 aic 找到最佳模型階數
+八、將找到的最佳階數傳給模型，以 .predict(start,end) 預測
+九、傳給模型的資料應是差分平穩後的，如果傳的是非平穩的原始資料，那就是要讓模型去預測、產出一個不平穩的結果
+十、因為給模型的資料是差分平穩後趨近於零的序列，所以產出來的結果要還原回來，方法： .cumsum()
+'''
+import pandas as pd
+import numpy as np
+from tkinter import filedialog
+import tkinter as tk
+from tkinter import StringVar
+from tkinter import ttk
+from statsmodels.tsa.arima_model import ARIMA
+from datetime import datetime,timedelta,date,time
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+def op():
+    try:
+        afew = int(gap01_entry.get())
+    except:
+        print('沒輸入天數')
+        result_label.configure(text = '沒輸入天數')
+    filename = filedialog.askopenfilename(title='選擇 yahoo finance excel ', filetypes=[('Excel', '*.xlsx'), ('All Files', '*')])
+    df = pd.read_excel(filename,index_col=0,header=0,parse_dates=True,squeeze=True)
+    d = pd.date_range(df.index.min(),df.index.max())
+    res = pd.Series(df['Close'],d)
+    res = res.dropna()
+    '''
+    B 是按工作日：星期一至五來排
+    D 是按每天來排
+    '''
+    mode = 'B'
+    res.index = pd.DatetimeIndex(res.index).to_period(mode)
+    df1 = pd.DataFrame(res)
+    ddf1 = np.log(df1).diff().dropna()
+    cols = list(df1.columns)
+    tree = ttk.Treeview(root)
+    tree.pack()
+    tree["columns"] = cols
+    for i in cols:
+        tree.column(i,anchor="center")
+        tree.heading(i,text=i,anchor='center')
+    for index, row in df.iterrows():
+        tree.insert("",'end',text = index,values=list(row))
+    tree.place(relx=0,rely=0.1,relheight=0.5,relwidth=1)
+    aic = float('inf')
+#原始資料 df1 已差分後資料 ddf1
+    data = df1
+    big = range(0,5)
+    for temp in big:
+     for temq in big:
+      '''
+      TempModel = ARIMA(data,(temp,1,temq))
+      放在 try 的外面：
+      放在 try 的裡面：
+      '''
+      tempr = ARIMA(data,(temp,1,temq))
+      try:
+       tempfitr = tempr.fit(disp=0,transparams=False)
+      except:
+       continue
+      finally:
+       if(tempfitr.aic < aic):
+        aic = tempfitr.aic
+        print(aic,temp,temq)
+        p = temp
+        q = temq
+    print('下述為最佳階數')
+    print(p,q)
+    r = ARIMA(ddf1,(p,1,q))
+    fitr = r.fit(disp=0,transparams=False)
+    pred = fitr.predict(start = df.index.max()+timedelta(0), end = df.index.max()+timedelta(afew),typ='levels',dynamic =True)
+    '''
+    用 cumsum 函式還原
+    '''
+    dfp = pd.DataFrame(pd.Series([res[0]], index=[res.index[0]]).append(pred).cumsum())
+    '''
+    dfp = dfp.loc[df.index.max()+timedelta(1):df.index.max()+timedelta(afew)]
+    加這行或不加這行的做用
+    加：  預測結果可能已算好所有日期的預測值，只是選擇從原始資料的最後斷點日期繼續開始，往後預測值而已。
+    不加：預測結果可能會重疊到原始資料後期某段時間，二者開始重合，預測結果開始接觸原始資料某段時間，繼續往後產出預測值，兩兩可以比較。
+    '''
+    dfp = dfp.loc[df.index.max()+timedelta(1):df.index.max()+timedelta(afew)]
+    dfp.columns = [str(afew)+' 天左右的預測價格']
+    print(dfp)
+    c =list(dfp.columns)
+    treep = ttk.Treeview(root)
+    treep.pack()
+    treep['columns'] = c
+    for i in c:
+        treep.column(i,anchor="center")
+        treep.heading(i,text=i,anchor='center')
+    for index, row in dfp.iterrows():
+        treep.insert("",'end',text = index,values=list(row))
+    treep.place(relx=0,rely=0.6,relheight=0.5,relwidth=1)
+def main():
+    global root
+    root = tk.Tk()
+    root.geometry("800x600")
+# 只能輸入數字的數字框
+    def test(content):
+        if content.isdigit() or (content==""):return True
+        else:return False
+#請輸入想要幾天的資料
+    v01=StringVar()
+    testCMD=root.register(test)
+    gap01_frame = ttk.Frame(root)
+    gap01_frame.pack(side=tk.TOP)
+    gap01_label = ttk.Label(gap01_frame, text='請輸入想要幾天的資料（預設六十二天 約略預測二個月）')
+    gap01_label.pack(side=tk.LEFT)
+    global gap01_entry
+    gap01_entry = ttk.Entry(gap01_frame,textvariable=v01,validate='key',validatecommand=(testCMD,'%P'))
+    gap01_entry.pack(side=tk.LEFT)
+    gap01_entry.insert(0, "62")
+    global result_label
+    result_label = tk.Label(root)
+    result_label.pack()
+    b1 = tk.Button(root, text="打開 yahoo finance excel ",command = op).pack()
+    root.mainloop()
+if __name__=='__main__':
+    main()
